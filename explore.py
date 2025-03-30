@@ -3,6 +3,9 @@ import nltk
 nltk.download('gutenberg')
 emma = nltk.corpus.gutenberg.words('austen-emma.txt')
 
+import os
+
+
 import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer
 import numpy as np
@@ -47,7 +50,7 @@ def get_multitoken_words(words):
 
   token_counts_per_word = torch.count_nonzero(tokenized_words_tensor, dim=1)
   index = 1
-  multitoken_indices = (token_counts_per_word > 3).nonzero().squeeze()
+  multitoken_indices = (token_counts_per_word >= 3).nonzero().squeeze()
   multitoken_words = tokens_of_words[multitoken_indices]
   token_counts_per_word = token_counts_per_word[multitoken_indices]
   return multitoken_words, token_counts_per_word
@@ -58,13 +61,13 @@ def get_hidden_states(word_tokens):
   query = f"Repeat this word. 1){word} 2)"
   query_ids = tokenizer.encode(query, return_tensors="pt").to(device)
   print("Length of query: ", len(query_ids[0]))
-  outputs = model.generate(query_ids, max_new_tokens=len(word_tokens), do_sample=False, return_dict_in_generate=True, output_hidden_states=True)
+  outputs = model.generate(query_ids, max_new_tokens=1, do_sample=False, return_dict_in_generate=True, output_hidden_states=True)
   output_ids = outputs.sequences
   hidden_states = outputs.hidden_states
   return hidden_states
 
 
-def plot_probabilities(hidden_states, word_ids):
+def get_probabilities(hidden_states, word_ids):
   first_gen = hidden_states[0]
   last_hidden = first_gen[-1].squeeze(0)[-1]
   unembed = model.lm_head.forward(last_hidden)
@@ -95,22 +98,26 @@ def plot_probabilities(hidden_states, word_ids):
   rankings = torch.Tensor(rankings)
   probabilties = torch.stack(probabilties, dim=0)
 
+  return probabilties, rankings
+
+
+def plot_probabilities(probabilities, rankings):
   plt.figure(figsize=(8, 5))  # Set figure size
-  probabilties = probabilties.to('cpu').detach().type(torch.float32)
-  x = np.arange(0, len(probabilties))
-  for i in range(probabilties.shape[1]):
-    plt.plot(x, probabilties[:, i].numpy(), label=f"Prob of '{word_tokens[i]}'", linestyle="-", marker="o")
+  probabilities = probabilities.to('cpu').detach().type(torch.float32)
+  x = np.arange(0, len(probabilities))
+  for i in range(probabilities.shape[1]):
+    plt.plot(x, probabilities[:, i].numpy(), label=f"Prob of Token {i}", linestyle="-", marker="o")
 
   # Add labels and title
   plt.xlabel("X-axis")
   plt.ylabel("Y-axis")
-  plt.title("Line Chart Example")
+  plt.title("Probability of Tokens")
 
   # Add a legend
   plt.legend()
 
   # Show the plot
-  plt.savefig(f"probabilities_{''.join(word_tokens)}.png")
+  plt.savefig(f"probabilities.png")
   plt.close()
 
   plt.figure(figsize=(8, 5))  # Set figure size
@@ -118,24 +125,40 @@ def plot_probabilities(hidden_states, word_ids):
   x = np.arange(0, len(rankings))
   plt.yscale('log')
   for i in range(rankings.shape[1]):
-    plt.plot(x, rankings[:, i].numpy() + 1, label=f"Ranking of '{word_tokens[i]}'", linestyle="-", marker="o")
+    plt.plot(x, rankings[:, i].numpy() + 1, label=f"Ranking of Token {i}", linestyle="-", marker="o")
 
   # Add labels and title
   plt.xlabel("X-axis")
   plt.ylabel("Y-axis")
-  plt.title("Line Chart Example")
+  plt.title("Ranking of Tokens")
 
   # Add a legend
   plt.legend()
 
   # Show the plot
-  plt.savefig(f"rankings_{''.join(word_tokens)}.png")
+  plt.savefig(f"rankings.png")
   plt.close()
+  
+if __name__ == "__main__":
+  torch.manual_seed(42)
+  
+  multitoken_words, token_counts_per_word = get_multitoken_words(emma)
 
-multitoken_words, token_counts_per_word = get_multitoken_words(emma)
+  num_tokens = 6
+  token_words = multitoken_words[token_counts_per_word == (num_tokens + 1)] #one for begining of seq token
+  random_sample_indices = torch.randint(0, len(token_words), (100,))
 
-idx = 0
-word_ids = multitoken_words[idx][:token_counts_per_word[idx]]
+  avg_probabilities = []
+  avg_rankings = []
+  for idx in random_sample_indices:
+    word = token_words[idx]
+    word_ids = word[:(num_tokens + 1)]
+    hidden_states = get_hidden_states(word_ids)
+    probabilities, rankings = get_probabilities(hidden_states, word_ids)
+    avg_probabilities.append(probabilities)
+    avg_rankings.append(rankings)
 
-hidden_states = get_hidden_states(word_ids)
-plot_probabilities(hidden_states, word_ids)
+  avg_probabilities = torch.stack(avg_probabilities, dim=0).mean(dim=0)
+  avg_rankings = torch.stack(avg_rankings, dim=0).median(dim=0).values
+
+  plot_probabilities(avg_probabilities, avg_rankings)
