@@ -3,10 +3,6 @@ import nltk
 nltk.download('gutenberg')
 emma = nltk.corpus.gutenberg.words('austen-emma.txt')
 
-import os
-from dotenv import load_dotenv
-load_dotenv()
-
 import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer
 import numpy as np
@@ -53,9 +49,9 @@ def get_multitoken_words(words):
   index = 1
   multitoken_indices = (token_counts_per_word > 3).nonzero().squeeze()
   multitoken_words = tokens_of_words[multitoken_indices]
+  token_counts_per_word = token_counts_per_word[multitoken_indices]
   return multitoken_words, token_counts_per_word
 
-multitoken_words, token_counts_per_word = get_multitoken_words(emma)
 
 def get_hidden_states(word_tokens):
   word = tokenizer.convert_ids_to_tokens(word_tokens, skip_special_tokens=True)
@@ -82,12 +78,13 @@ def plot_probabilities(hidden_states, word_ids):
   for layer in first_gen:
     layer = layer.squeeze(0)[-1]
 
+
     unembed = model.lm_head.forward(layer)
-    probabilties.append(unembed[word_ids[0][1:]])
+    probabilties.append(unembed[word_ids[1:]])
     tokens = torch.sort(unembed, descending=True)
 
     ranking_vec = []
-    for word in word_ids[0][1:]:
+    for word in word_ids[1:]:
       ranking = torch.where(tokens.values > unembed[word])
       ranking = torch.count_nonzero(ranking[0])
       ranking_vec.append(ranking)
@@ -135,5 +132,10 @@ def plot_probabilities(hidden_states, word_ids):
   plt.savefig(f"rankings_{''.join(word_tokens)}.png")
   plt.close()
 
-hidden_states = get_hidden_states(multitoken_words[0])
-plot_probabilities(hidden_states, multitoken_words[0])
+multitoken_words, token_counts_per_word = get_multitoken_words(emma)
+
+idx = 0
+word_ids = multitoken_words[idx][:token_counts_per_word[idx]]
+
+hidden_states = get_hidden_states(word_ids)
+plot_probabilities(hidden_states, word_ids)
