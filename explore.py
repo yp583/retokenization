@@ -56,12 +56,21 @@ def get_multitoken_words(words):
   return multitoken_words, token_counts_per_word
 
 
-def get_hidden_states(word_tokens):
+def get_hidden_states(word_tokens, alr_gened = 0):
   word = tokenizer.convert_ids_to_tokens(word_tokens, skip_special_tokens=True)
-  query = f"Repeat this word. 1){word} 2)"
+  query = f"Repeat this word. 1)"
+  word_tokens = word_tokens.to(device)
   query_ids = tokenizer.encode(query, return_tensors="pt").to(device)
-  print("Length of query: ", len(query_ids[0]))
-  outputs = model.generate(query_ids, max_new_tokens=1, do_sample=False, return_dict_in_generate=True, output_hidden_states=True)
+  query_pt2_ids = tokenizer.encode("2)", return_tensors="pt").to(device)
+  
+  query_ids = query_ids.squeeze(0)
+  query_pt2_ids = query_pt2_ids.squeeze(0)
+  
+  
+  query_full_ids = torch.cat([query_ids, word_tokens[1:], query_pt2_ids, word_tokens[1:1+alr_gened]]).unsqueeze(0)
+  
+  
+  outputs = model.generate(query_full_ids, max_new_tokens=1, do_sample=False, return_dict_in_generate=True, output_hidden_states=True)
   output_ids = outputs.sequences
   hidden_states = outputs.hidden_states
   return hidden_states
@@ -82,17 +91,20 @@ def get_probabilities(hidden_states, word_ids):
     layer = layer.squeeze(0)[-1]
 
 
-    unembed = model.lm_head.forward(layer)
-    probabilties.append(unembed[word_ids[1:]])
-    tokens = torch.sort(unembed, descending=True)
+    unembed = model.lm_head.forward(model.model.norm(layer))
+    prob_t = torch.softmax(unembed, dim=0)
+    probabilties.append(prob_t[word_ids[1:]])
+    tokens = torch.sort(prob_t, descending=True)
+    
 
     ranking_vec = []
     for word in word_ids[1:]:
-      ranking = torch.where(tokens.values > unembed[word])
+      ranking = torch.where(tokens.values > prob_t[word])
       ranking = torch.count_nonzero(ranking[0])
       ranking_vec.append(ranking)
 
     rankings.append(ranking_vec)
+  
 
 
   rankings = torch.Tensor(rankings)
@@ -111,6 +123,7 @@ def plot_probabilities(probabilities, rankings):
   # Add labels and title
   plt.xlabel("X-axis")
   plt.ylabel("Y-axis")
+  plt.yscale('log')
   plt.title("Probability of Tokens")
 
   # Add a legend
@@ -139,6 +152,15 @@ def plot_probabilities(probabilities, rankings):
   plt.savefig(f"rankings.png")
   plt.close()
   
+def complex_metrics(probabilities, rankings):
+  all_token_probabilities = torch.sum(probabilities, dim=1)
+  all_token_proportions = probabilities / all_token_probabilities.unsqueeze(-1)
+  return all_token_proportions
+  
+  
+
+
+from tqdm import tqdm
 if __name__ == "__main__":
   torch.manual_seed(42)
   
@@ -146,15 +168,19 @@ if __name__ == "__main__":
 
   num_tokens = 3
   token_words = multitoken_words[token_counts_per_word == (num_tokens + 1)] #one for begining of seq token
-  random_sample_indices = torch.randint(0, len(token_words), (100,))
+  random_sample_indices = torch.multinomial(torch.ones(len(token_words)), min(100, len(token_words)), replacement=False)
 
   avg_probabilities = []
+  avg_metrics = []
   avg_rankings = []
-  for idx in random_sample_indices:
+  for idx in tqdm(random_sample_indices):
     word = token_words[idx]
     word_ids = word[:(num_tokens + 1)]
-    hidden_states = get_hidden_states(word_ids)
+    hidden_states = get_hidden_states(word_ids, alr_gened = 0)
     probabilities, rankings = get_probabilities(hidden_states, word_ids)
+    
+    print(complex_metrics(probabilities, rankings))
+    
     avg_probabilities.append(probabilities)
     avg_rankings.append(rankings)
 
