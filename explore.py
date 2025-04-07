@@ -144,7 +144,7 @@ if __name__ == "__main__":
   
   multitoken_words, token_counts_per_word = get_multitoken_words(emma)
 
-  num_tokens = 6
+  num_tokens = 3
   token_words = multitoken_words[token_counts_per_word == (num_tokens + 1)] #one for begining of seq token
   random_sample_indices = torch.randint(0, len(token_words), (100,))
 
