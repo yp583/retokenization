@@ -92,7 +92,7 @@ def get_probabilities(hidden_states, word_ids):
 
 
     unembed = model.lm_head.forward(model.model.norm(layer))
-    prob_t = torch.softmax(unembed, dim=0)
+    prob_t = unembed
     probabilties.append(prob_t[word_ids[1:]])
     tokens = torch.sort(prob_t, descending=True)
     
@@ -152,39 +152,120 @@ def plot_probabilities(probabilities, rankings):
   plt.savefig(f"rankings.png")
   plt.close()
   
-def complex_metrics(probabilities, rankings):
+def get_word_representation(word_ids):
+  with torch.no_grad():
+    outputs = model(word_ids.to(device).unsqueeze(0), output_hidden_states=True)
+  last_token_hidden = outputs.hidden_states
+  word_representation = last_token_hidden[6][0][-1]
+  return word_representation
+
+def complex_metrics(probabilities, hidden_states):
   all_token_probabilities = torch.sum(probabilities, dim=1)
   all_token_proportions = probabilities / all_token_probabilities.unsqueeze(-1)
-  return all_token_proportions
+  
+  summed_probabilities = torch.sum(probabilities, dim=1)
+  
+  word_representation = get_word_representation(word_ids).unsqueeze(0)
+  dist_to_word_representation = torch.nn.functional.cosine_similarity(hidden_states, word_representation, dim=1)
   
   
+  return all_token_proportions, summed_probabilities, dist_to_word_representation
+  
+def plot_proportions(proportions):
+  plt.figure(figsize=(8, 5))  # Set figure size
+  x = np.arange(0, len(proportions))
+  for i in range(proportions.shape[1]):
+    plt.plot(x, proportions[:, i].to('cpu').detach().type(torch.float32).numpy(), label=f"Token {i}", linestyle="-", marker="o")
 
+  # Add labels and title
+  plt.xlabel("X-axis")
+  plt.ylabel("Y-axis")
+  plt.title("Proportions")
+
+  # Add a legend
+  plt.legend()  
+  plt.savefig(f"proportions.png")
+  plt.close()
+
+def plot_summed_probabilities(summed_probabilities):
+  plt.figure(figsize=(8, 5))  # Set figure size
+  x = np.arange(0, len(summed_probabilities))
+  plt.plot(x, summed_probabilities.to('cpu').detach().type(torch.float32).numpy(), label="Summed Probabilities", linestyle="-", marker="o")
+
+  plt.xlabel("X-axis")
+  plt.ylabel("Y-axis")
+  plt.title("Summed Probabilities")
+
+  # Add a legend
+  plt.legend()
+  plt.savefig(f"summed_probabilities.png")
+  plt.close()
+
+def plot_dist_to_word_representation(dist_to_word_representation):
+  plt.figure(figsize=(8, 5))  # Set figure size
+  x = np.arange(0, len(dist_to_word_representation))
+  plt.plot(x, dist_to_word_representation.to('cpu').detach().type(torch.float32).numpy(), label="Dist to Word Representation", linestyle="-", marker="o")
+
+  plt.xlabel("X-axis")
+  plt.ylabel("Y-axis")
+  plt.title("Dist to Word Representation")
+
+  # Add a legend
+  plt.legend()
+  plt.savefig(f"dist_to_word_representation.png")
+  plt.close()
 
 from tqdm import tqdm
+import gc
 if __name__ == "__main__":
   torch.manual_seed(42)
   
   multitoken_words, token_counts_per_word = get_multitoken_words(emma)
 
-  num_tokens = 3
+  num_tokens = 2
   token_words = multitoken_words[token_counts_per_word == (num_tokens + 1)] #one for begining of seq token
-  random_sample_indices = torch.multinomial(torch.ones(len(token_words)), min(100, len(token_words)), replacement=False)
+  random_sample_indices = torch.multinomial(torch.ones(len(token_words)), min(30, len(token_words)), replacement=False)
 
   avg_probabilities = []
+  avg_summed_probabilities = []
+  avg_dist_to_word_representation = []
+  
   avg_metrics = []
   avg_rankings = []
+  
+  
   for idx in tqdm(random_sample_indices):
     word = token_words[idx]
     word_ids = word[:(num_tokens + 1)]
     hidden_states = get_hidden_states(word_ids, alr_gened = 0)
     probabilities, rankings = get_probabilities(hidden_states, word_ids)
     
-    print(complex_metrics(probabilities, rankings))
+    hidden_states = torch.stack(hidden_states[0], dim=0).squeeze(1)
+    
+    
+    proportions, summed_probabilities, dist_to_word_representation = complex_metrics(probabilities, hidden_states[:, -1, :])
+    
+    
+    avg_metrics.append(proportions)
+    avg_summed_probabilities.append(summed_probabilities)
+    avg_dist_to_word_representation.append(dist_to_word_representation)
     
     avg_probabilities.append(probabilities)
     avg_rankings.append(rankings)
+    
+    torch.cuda.empty_cache()
+    gc.collect()
 
+  avg_metrics = torch.stack(avg_metrics, dim=0).mean(dim=0)
+  avg_summed_probabilities = torch.stack(avg_summed_probabilities, dim=0).mean(dim=0)
+  avg_dist_to_word_representation = torch.stack(avg_dist_to_word_representation, dim=0).mean(dim=0)
+  
+  
   avg_probabilities = torch.stack(avg_probabilities, dim=0).mean(dim=0)
   avg_rankings = torch.stack(avg_rankings, dim=0).median(dim=0).values
+  
 
   plot_probabilities(avg_probabilities, avg_rankings)
+  plot_proportions(avg_metrics)
+  plot_summed_probabilities(avg_summed_probabilities)
+  plot_dist_to_word_representation(avg_dist_to_word_representation)
