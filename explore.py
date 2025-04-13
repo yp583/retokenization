@@ -91,8 +91,8 @@ def get_probabilities(hidden_states, word_ids):
     layer = layer.squeeze(0)[-1]
 
 
-    unembed = model.lm_head.forward(model.model.norm(layer))
-    prob_t = unembed
+    unembed = model.lm_head.forward(layer)
+    prob_t = torch.nn.functional.softmax(unembed, dim=0)
     probabilties.append(prob_t[word_ids[1:]])
     tokens = torch.sort(prob_t, descending=True)
     
